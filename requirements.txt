@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+requests
+langchain
+chromadb
+wikipedia
+pydantic
