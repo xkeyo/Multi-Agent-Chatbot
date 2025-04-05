@@ -1,11 +1,9 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 from agents import ai_agent, concordia_agent, general_agent
+from context_store import add_context, get_context
 
 app = FastAPI()
-
-# In-memory conversation context (session_id -> list of previous interactions)
-session_context = {}
 
 class ChatRequest(BaseModel):
     message: str
@@ -13,7 +11,8 @@ class ChatRequest(BaseModel):
 
 def choose_agent(message: str):
     lower_message = message.lower()
-    if "concordia" in lower_message and "admission" in lower_message:
+    # Only choose Concordia agent if the message explicitly mentions "concordia", "admission", and "computer science"
+    if "concordia" in lower_message and "admission" in lower_message and "computer science" in lower_message:
         return concordia_agent.concordia_agent
     elif "ai" in lower_message or "machine learning" in lower_message:
         return ai_agent.ai_agent
@@ -22,20 +21,20 @@ def choose_agent(message: str):
 
 @app.post("/chat")
 def chat(request: ChatRequest):
-    # Retrieve the last 3 context entries if available
-    context = ""
-    if request.session_id in session_context:
-        history = session_context[request.session_id]
-        context = "\n".join(history[-3:]) + "\n" if history else ""
+    # Retrieve relevant context from ChromaDB for the current session using the user's message as query.
+    previous_contexts = get_context(request.session_id, request.message, n_results=3)
+    # print("Retrieved Context:", previous_contexts)
+    context_text = "\n".join(previous_contexts) + "\n" if previous_contexts else ""
     
-    # Build the full prompt including any context
-    full_prompt = f"{context}User: {request.message}\nAssistant:"
+    # Build the full prompt by pre-pending the retrieved context.
+    full_prompt = f"{context_text}User: {request.message}\nAssistant:"
     
-    # Choose the appropriate agent based on message content
+    # Choose the agent based on the message content.
     agent_func = choose_agent(request.message)
     response = agent_func(full_prompt)
     
-    # Update conversation context for multi-turn conversation
-    session_context.setdefault(request.session_id, []).append(f"User: {request.message}\nAssistant: {response}")
+    # Save the current user message and assistant response in ChromaDB.
+    add_context(request.session_id, request.message, role="user")
+    add_context(request.session_id, response, role="assistant")
     
     return {"message": response}
