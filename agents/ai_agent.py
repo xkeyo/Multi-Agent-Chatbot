@@ -1,4 +1,5 @@
 from ollama_service import ask_ollama
+import logging
 
 def ai_agent(message: str) -> str:
     # Comprehensive additional context for AI-related questions.
@@ -24,4 +25,6 @@ Background Information (for internal use):
 
 User: {message}
 Assistant:"""
-    return ask_ollama(prompt)
+    response = ask_ollama(prompt)
+    # logging.debug(f"AI Agent generated response: {response}")
+    return response

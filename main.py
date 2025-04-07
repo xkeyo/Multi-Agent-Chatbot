@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from agents import ai_agent, concordia_agent, general_agent
 from context_store import add_context, get_context
+from sentence_transformers import SentenceTransformer, util
 
 app = FastAPI()
 
@@ -9,12 +10,55 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str = "default"  # default session if none provided
 
+# Load the embedding model globally
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+
+# Define domain prototypes
+# The Concordia prototype is very specific: it emphasizes admission to the Concordia Computer Science program.
+concordia_prototype = ("Admission to the Concordia University Computer Science program, "
+                       "including application requirements, cut-off averages, and process for admission")
+ai_prototype = "Artificial Intelligence, machine learning, deep learning, AI research, modern AI breakthroughs"
+general_prototype = "General inquiries, everyday questions, general information"
+
+# Pre-compute embeddings for each prototype
+concordia_embedding = embedding_model.encode(concordia_prototype, convert_to_tensor=True)
+ai_embedding = embedding_model.encode(ai_prototype, convert_to_tensor=True)
+general_embedding = embedding_model.encode(general_prototype, convert_to_tensor=True)
+
 def choose_agent(message: str):
-    lower_message = message.lower()
-    # Only choose Concordia agent if the message explicitly mentions "concordia", "admission", and "computer science"
-    if "concordia" in lower_message and "admission" in lower_message and "computer science" in lower_message:
+    # Compute the embedding for the user message.
+    query_embedding = embedding_model.encode(message, convert_to_tensor=True)
+    
+    # Compute cosine similarities.
+    concordia_sim = util.pytorch_cos_sim(query_embedding, concordia_embedding).item()
+    ai_sim = util.pytorch_cos_sim(query_embedding, ai_embedding).item()
+    general_sim = util.pytorch_cos_sim(query_embedding, general_embedding).item()
+    
+    # Apply weighting: boost the general similarity by 50%
+    general_weight = 1.5
+    weighted_general_sim = general_sim * general_weight
+    
+    # Debug output
+    print(f"Similarity Scores => Concordia: {concordia_sim:.3f}, AI: {ai_sim:.3f}, General (weighted): {weighted_general_sim:.3f}")
+    
+    # Define a minimum threshold. If the best similarity is below this, default to general.
+    minimum_threshold = 0.4
+    
+    scores = {
+        "concordia": concordia_sim,
+        "ai": ai_sim,
+        "general": weighted_general_sim
+    }
+    
+    best_agent = max(scores, key=scores.get)
+    
+    # If the highest score is below the threshold, default to general.
+    if scores[best_agent] < minimum_threshold:
+        best_agent = "general"
+    
+    if best_agent == "concordia":
         return concordia_agent.concordia_agent
-    elif "ai" in lower_message or "machine learning" in lower_message:
+    elif best_agent == "ai":
         return ai_agent.ai_agent
     else:
         return general_agent.general_agent

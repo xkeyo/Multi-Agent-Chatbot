@@ -42,7 +42,7 @@ def general_agent(message: str) -> str:
     else:
         original_query = message
     wiki_query = extract_query(original_query)
-    logging.debug(f"Extracted query for Wikipedia: '{wiki_query}'")
+    # logging.debug(f"Extracted query for Wikipedia: '{wiki_query}'")
     
     wiki_info = search_wikipedia(wiki_query)
     
