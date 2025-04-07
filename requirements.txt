@@ -5,3 +5,4 @@ langchain
 chromadb
 wikipedia
 pydantic
+sentence-transformers
