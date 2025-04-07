@@ -4,7 +4,7 @@ def ai_agent(message: str) -> str:
     # Comprehensive additional context for AI-related questions.
     additional_context = """
 Additional Context for AI-Related Questions:
-- Artificial Intelligence (AI) is a broad field of computer science dedicated to creating systems that can perform tasks that typically require human intelligence. According to Wikipedia, AI encompasses the simulation of human cognitive functions such as learning, reasoning, problem-solving, perception, and language understanding.
+- Artificial Intelligence (AI) is a broad field of computer science dedicated to creating systems that can perform tasks that typically require human intelligence. AI encompasses the simulation of human cognitive functions such as learning, reasoning, problem-solving, perception, and language understanding.
 - Historically, AI research began with symbolic systems and rule-based approaches in the 1950s. Over time, the field evolved to include statistical methods and, more recently, machine learning techniques, particularly deep learning, which uses multi-layered neural networks to analyze large amounts of data.
 - Key subfields of AI include:
     • Machine Learning (ML): Focuses on developing algorithms that allow computers to learn patterns from data. ML techniques are divided into supervised, unsupervised, and reinforcement learning, with deep learning being a prominent subset.
