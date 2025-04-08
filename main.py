@@ -1,7 +1,12 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 from agents import ai_agent, concordia_agent, general_agent
-from context_store import add_context, get_context
+from context_store import get_context
+from langchain_memory import (
+    add_message_to_memory, 
+    get_formatted_history, 
+    get_prompt_template
+)
 from sentence_transformers import SentenceTransformer, util
 
 app = FastAPI()
@@ -56,29 +61,61 @@ def choose_agent(message: str):
     if scores[best_agent] < minimum_threshold:
         best_agent = "general"
     
+    # Return agent type and function
     if best_agent == "concordia":
-        return concordia_agent.concordia_agent
+        return "concordia", concordia_agent.concordia_agent
     elif best_agent == "ai":
-        return ai_agent.ai_agent
+        return "ai", ai_agent.ai_agent
     else:
-        return general_agent.general_agent
+        return "general", general_agent.general_agent
 
 @app.post("/chat")
 def chat(request: ChatRequest):
-    # Retrieve relevant context from ChromaDB for the current session using the user's message as query.
+    # Retrieve relevant context from ChromaDB for the current session using the user's message as query
     previous_contexts = get_context(request.session_id, request.message, n_results=3)
-    # print("Retrieved Context:", previous_contexts)
-    context_text = "\n".join(previous_contexts) + "\n" if previous_contexts else ""
+    context_text = "\n".join(previous_contexts) if previous_contexts else "No relevant context found."
     
-    # Build the full prompt by pre-pending the retrieved context.
-    full_prompt = f"{context_text}User: {request.message}\nAssistant:"
+    # Get conversation history from LangChain memory
+    conversation_history = get_formatted_history(request.session_id)
     
-    # Choose the agent based on the message content.
-    agent_func = choose_agent(request.message)
-    response = agent_func(full_prompt)
+    # Choose the agent based on the message content
+    agent_type, agent_func = choose_agent(request.message)
     
-    # Save the current user message and assistant response in ChromaDB.
-    add_context(request.session_id, request.message, role="user")
-    add_context(request.session_id, response, role="assistant")
+    # Get the appropriate prompt template based on agent type
+    prompt_template = get_prompt_template(agent_type)
+    
+    # Prepare prompt variables
+    prompt_vars = {
+        "context": context_text,
+        "history": conversation_history,
+        "message": request.message
+    }
+    
+    # Add agent-specific context if needed
+    if agent_type == "ai":
+        ai_additional_context = """
+        AI encompasses machine learning, neural networks, computer vision, natural language processing,
+        robotics, and many other subfields. Recent breakthroughs include large language models, diffusion models
+        for image generation, and reinforcement learning for complex decision-making.
+        """
+        prompt_vars["ai_context"] = ai_additional_context
+    
+    elif agent_type == "concordia":
+        concordia_additional_context = """
+        Concordia University's Computer Science program offers Bachelor's, Master's, and PhD degrees.
+        Admission requirements include strong math skills, with CEGEP students needing a 27+ overall average
+        and 26+ in math courses. The program covers programming, algorithms, data structures, AI, and software engineering.
+        """
+        prompt_vars["concordia_context"] = concordia_additional_context
+    
+    # Format the prompt using LangChain's template
+    formatted_prompt = prompt_template.format(**prompt_vars)
+    
+    # Get response from the appropriate agent
+    response = agent_func(formatted_prompt)
+    
+    # Save the user message and bot response using LangChain memory and ChromaDB
+    add_message_to_memory(request.session_id, request.message, role="user")
+    add_message_to_memory(request.session_id, response, role="assistant")
     
     return {"message": response}
