@@ -1,25 +1,26 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 from agents import ai_agent, concordia_agent, general_agent
-from context_store import get_context
-from langchain_memory import (
-    add_message_to_memory, 
-    get_formatted_history, 
-    get_prompt_template
-)
+from context_store import add_context, get_context
 from sentence_transformers import SentenceTransformer, util
+from langchain_memory import LangChainMemoryManager, PromptEngineering
+from typing import Dict
+import uuid
 
 app = FastAPI()
 
 class ChatRequest(BaseModel):
     message: str
-    session_id: str = "default"  # default session if none provided
+    session_id: str = None  # Make session_id optional
+
+class ChatResponse(BaseModel):
+    message: str
+    session_id: str  # Always return the session ID
 
 # Load the embedding model globally
 embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 # Define domain prototypes
-# The Concordia prototype is very specific: it emphasizes admission to the Concordia Computer Science program.
 concordia_prototype = ("Admission to the Concordia University Computer Science program, "
                        "including application requirements, cut-off averages, and process for admission")
 ai_prototype = "Artificial Intelligence, machine learning, deep learning, AI research, modern AI breakthroughs"
@@ -30,22 +31,20 @@ concordia_embedding = embedding_model.encode(concordia_prototype, convert_to_ten
 ai_embedding = embedding_model.encode(ai_prototype, convert_to_tensor=True)
 general_embedding = embedding_model.encode(general_prototype, convert_to_tensor=True)
 
-def clean_user_message(message: str):
-    """Extract just the user's message from potentially complex prompts"""
-    if "user:" in message.lower():
-        parts = message.split("User:", 1)
-        if len(parts) > 1:
-            message = parts[1].split("Assistant:", 1)[0].strip()
-    return message
+# Store active memory managers
+memory_managers: Dict[str, LangChainMemoryManager] = {}
 
-def choose_agent(message: str):
-    # Clean the message first
-    message = clean_user_message(message)
-    
-    # Compute the embedding for the user message.
+def get_memory_manager(session_id: str) -> LangChainMemoryManager:
+    """Get or create a memory manager for the given session"""
+    if session_id not in memory_managers:
+        memory_managers[session_id] = LangChainMemoryManager(session_id=session_id, memory_type="window", k=5)
+    return memory_managers[session_id]
+
+def choose_agent_and_domain(message: str):
+    # Compute the embedding for the user message
     query_embedding = embedding_model.encode(message, convert_to_tensor=True)
     
-    # Compute cosine similarities.
+    # Compute cosine similarities
     concordia_sim = util.pytorch_cos_sim(query_embedding, concordia_embedding).item()
     ai_sim = util.pytorch_cos_sim(query_embedding, ai_embedding).item()
     general_sim = util.pytorch_cos_sim(query_embedding, general_embedding).item()
@@ -57,7 +56,7 @@ def choose_agent(message: str):
     # Debug output
     print(f"Similarity Scores => Concordia: {concordia_sim:.3f}, AI: {ai_sim:.3f}, General (weighted): {weighted_general_sim:.3f}")
     
-    # Define a minimum threshold. If the best similarity is below this, default to general.
+    # Define a minimum threshold. If the best similarity is below this, default to general
     minimum_threshold = 0.4
     
     scores = {
@@ -66,34 +65,53 @@ def choose_agent(message: str):
         "general": weighted_general_sim
     }
     
-    best_agent = max(scores, key=scores.get)
+    best_domain = max(scores, key=scores.get)
     
-    # If the highest score is below the threshold, default to general.
-    if scores[best_agent] < minimum_threshold:
-        best_agent = "general"
+    # If the highest score is below the threshold, default to general
+    if scores[best_domain] < minimum_threshold:
+        best_domain = "general"
     
-    # Return agent type and function
-    if best_agent == "concordia":
-        return "concordia", concordia_agent.concordia_agent
-    elif best_agent == "ai":
-        return "ai", ai_agent.ai_agent
+    if best_domain == "concordia":
+        return concordia_agent.concordia_agent, best_domain
+    elif best_domain == "ai":
+        return ai_agent.ai_agent, best_domain
     else:
-        return "general", general_agent.general_agent
+        return general_agent.general_agent, best_domain
 
-@app.post("/chat")
+@app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
-    # Clean user message first
-    clean_message = clean_user_message(request.message)
+    # Generate a session ID if not provided
+    if not request.session_id:
+        request.session_id = str(uuid.uuid4())
     
-    # Choose the agent before getting context
-    agent_type, agent_func = choose_agent(clean_message)
+    # Get the memory manager for this session
+    memory_manager = get_memory_manager(request.session_id)
     
-    # Get agent response directly with the clean message
-    response = agent_func(clean_message)
+    # Retrieve relevant context from ChromaDB for the current session
+    previous_contexts = get_context(request.session_id, request.message, n_results=3)
+    context_text = "\n".join(previous_contexts) if previous_contexts else ""
     
-    # IMPORTANT: Only store the clean user message and final response
-    # This ensures we don't store prompt templates in the context
-    add_message_to_memory(request.session_id, clean_message, role="user")
-    add_message_to_memory(request.session_id, response, role="assistant")
+    # Choose the agent based on the message content
+    agent_func, domain = choose_agent_and_domain(request.message)
     
-    return {"message": response}
+    # Create a domain-specific prompt using the PromptEngineering class
+    custom_prompt = PromptEngineering.create_domain_specific_prompt(
+        domain=domain,
+        user_input=request.message,
+        context=context_text
+    )
+    
+    # Add the user message to memory
+    memory_manager.add_user_message(request.message)
+    
+    response = memory_manager.generate_response(request.message, custom_prompt=custom_prompt)
+
+    
+    # Add the assistant's response to memory
+    memory_manager.add_ai_message(response)
+    
+    # Save the current user message and assistant response in ChromaDB
+    add_context(request.session_id, request.message, role="user")
+    add_context(request.session_id, response, role="assistant")
+    
+    return {"message": response, "session_id": request.session_id}

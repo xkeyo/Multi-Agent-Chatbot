@@ -1,96 +1,140 @@
-from langchain.memory import ConversationBufferMemory
+# langchain_integration.py
+from langchain.memory import ConversationBufferMemory, ConversationBufferWindowMemory
+from langchain.chains import ConversationChain
+from langchain.llms.ollama import Ollama
 from langchain.prompts import PromptTemplate
-from context_store import add_context as db_add_context, get_context as db_get_context
+from langchain.prompts.pipeline import PipelinePromptTemplate
+from typing import Dict, List, Optional
 
-# Session memory dictionary
-session_memories = {}
-
-def get_session_memory(session_id: str):
-    """Get or create a LangChain memory object for the session"""
-    if session_id not in session_memories:
-        session_memories[session_id] = ConversationBufferMemory(return_messages=True)
-    return session_memories[session_id]
-
-def add_message_to_memory(session_id: str, message: str, role: str):
-    """Add a message to both ChromaDB and LangChain memory"""
-    # Add to ChromaDB for vector retrieval
-    db_add_context(session_id, message, role)
-    
-    # Add to LangChain memory
-    memory = get_session_memory(session_id)
-    if role == "user":
-        memory.chat_memory.add_user_message(message)
-    else:
-        memory.chat_memory.add_ai_message(message)
-
-def get_prompt_template(template_type="general"):
-    """Get a LangChain prompt template based on the type"""
-    templates = {
-        "general": PromptTemplate(
-            input_variables=["context", "history", "message"],
-            template="""
-You are a helpful AI assistant. Please provide a thoughtful response based on the following:
-
-Previous context:
-{context}
-
-Conversation history:
-{history}
-
-User: {message}
-Assistant:"""
-        ),
-        "ai": PromptTemplate(
-            input_variables=["context", "history", "message", "ai_context"],
-            template="""
-You are an expert in Artificial Intelligence. Please provide a detailed and informative response based on the following:
-
-Previous context:
-{context}
-
-Additional AI context:
-{ai_context}
-
-Conversation history:
-{history}
-
-User: {message}
-Assistant:"""
-        ),
-        "concordia": PromptTemplate(
-            input_variables=["context", "history", "message", "concordia_context"],
-            template="""
-You are a Concordia University admissions specialist for the Computer Science program. Please provide helpful information based on the following:
-
-Previous context:
-{context}
-
-Concordia CS program information:
-{concordia_context}
-
-Conversation history:
-{history}
-
-User: {message}
-Assistant:"""
+class LangChainMemoryManager:
+    def __init__(self, session_id: str = "default", memory_type: str = "buffer", k: int = 5):
+        """
+        Initialize the LangChain memory manager.
+        
+        Args:
+            session_id: Unique identifier for the conversation session
+            memory_type: Type of memory to use ("buffer" or "window")
+            k: Number of previous exchanges to keep in window memory
+        """
+        self.session_id = session_id
+        self.memory_type = memory_type
+        
+        # Initialize Ollama model
+        self.llm = Ollama(model="llama3.2")
+        
+        # Choose memory type
+        if memory_type == "window":
+            self.memory = ConversationBufferWindowMemory(k=k)
+        else:  # Default to buffer memory
+            self.memory = ConversationBufferMemory()
+        
+        # Initialize conversation chain
+        self.conversation = ConversationChain(
+            llm=self.llm,
+            memory=self.memory,
+            verbose=False
         )
-    }
     
-    return templates.get(template_type, templates["general"])
+    def get_conversation_history(self) -> str:
+        """Get the current conversation history from memory"""
+        return self.memory.buffer
+    
+    def add_user_message(self, message: str) -> None:
+        """Add a user message to memory"""
+        self.memory.chat_memory.add_user_message(message)
+    
+    def add_ai_message(self, message: str) -> None:
+        """Add an AI response to memory"""
+        self.memory.chat_memory.add_ai_message(message)
+    
+    def generate_response(self, message: str, custom_prompt: Optional[str] = None) -> str:
+        """Generate a response using the conversation chain"""
+        if custom_prompt:
+            # Use custom prompt template if provided
+            prompt = PromptTemplate(
+                input_variables=["history", "input"],
+                template=custom_prompt
+            )
+            self.conversation.prompt = prompt
+        
+        return self.conversation.predict(input=message)
+    
+    def clear_memory(self) -> None:
+        """Clear the conversation memory"""
+        self.memory.clear()
 
-def get_formatted_history(session_id: str):
-    """Get formatted conversation history from LangChain memory"""
-    memory = get_session_memory(session_id)
-    messages = memory.chat_memory.messages
+
+class PromptEngineering:
+    """Helper class for advanced prompt engineering techniques"""
     
-    if not messages:
-        return ""
+    @staticmethod
+    def create_domain_specific_prompt(domain: str, user_input: str, context: str = "") -> str:
+        """Create a domain-specific prompt template"""
+        
+        templates = {
+            "ai": """
+You are an expert in Artificial Intelligence with deep knowledge across theory, research, and practical applications.
+Use your expertise to provide a clear, detailed, and accurate answer to the question.
+
+Context information:
+{context}
+
+Conversation history:
+{history}
+
+User question: {input}
+AI Assistant:""",
+            
+            "concordia": """
+You are an expert in Concordia University Computer Science Admissions with a deep understanding of the program structure, 
+admission criteria, co-op opportunities, and career outcomes.
+
+Context information:
+{context}
+
+Conversation history:
+{history}
+
+User question: {input}
+AI Assistant:""",
+            
+            "general": """
+You're a helpful AI assistant that provides accurate, concise, and relevant information on a wide range of topics.
+
+Context information:
+{context}
+
+Conversation history:
+{history}
+
+User question: {input}
+AI Assistant:"""
+        }
+        
+        # Default to general if domain not found
+        template = templates.get(domain, templates["general"])
+        
+        # Create the prompt template
+        return template.format(context=context, history="", input=user_input)
     
-    formatted_history = ""
-    for msg in messages[-6:]:  # Limit to last 6 messages to keep context manageable
-        if msg.type == "human":
-            formatted_history += f"User: {msg.content}\n"
-        else:
-            formatted_history += f"Assistant: {msg.content}\n"
-    
-    return formatted_history
+    @staticmethod
+    def create_pipeline_prompt(components: List[Dict]) -> PipelinePromptTemplate:
+        """Create a pipeline prompt from multiple components"""
+        prompt_templates = []
+        final_variables = set()
+        
+        for component in components:
+            template = PromptTemplate(
+                template=component["template"],
+                input_variables=component["variables"]
+            )
+            prompt_templates.append({"name": component["name"], "prompt": template})
+            final_variables.update(component["variables"])
+        
+        # The final template combines all components
+        final_template = "\n\n".join([f"{{{component['name']}}}" for component in components])
+        
+        return PipelinePromptTemplate(
+            final_prompt=PromptTemplate(template=final_template, input_variables=list(final_variables)),
+            pipeline_prompts=prompt_templates
+        )
