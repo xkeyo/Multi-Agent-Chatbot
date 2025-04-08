@@ -30,7 +30,18 @@ concordia_embedding = embedding_model.encode(concordia_prototype, convert_to_ten
 ai_embedding = embedding_model.encode(ai_prototype, convert_to_tensor=True)
 general_embedding = embedding_model.encode(general_prototype, convert_to_tensor=True)
 
+def clean_user_message(message: str):
+    """Extract just the user's message from potentially complex prompts"""
+    if "user:" in message.lower():
+        parts = message.split("User:", 1)
+        if len(parts) > 1:
+            message = parts[1].split("Assistant:", 1)[0].strip()
+    return message
+
 def choose_agent(message: str):
+    # Clean the message first
+    message = clean_user_message(message)
+    
     # Compute the embedding for the user message.
     query_embedding = embedding_model.encode(message, convert_to_tensor=True)
     
@@ -71,51 +82,18 @@ def choose_agent(message: str):
 
 @app.post("/chat")
 def chat(request: ChatRequest):
-    # Retrieve relevant context from ChromaDB for the current session using the user's message as query
-    previous_contexts = get_context(request.session_id, request.message, n_results=3)
-    context_text = "\n".join(previous_contexts) if previous_contexts else "No relevant context found."
+    # Clean user message first
+    clean_message = clean_user_message(request.message)
     
-    # Get conversation history from LangChain memory
-    conversation_history = get_formatted_history(request.session_id)
+    # Choose the agent before getting context
+    agent_type, agent_func = choose_agent(clean_message)
     
-    # Choose the agent based on the message content
-    agent_type, agent_func = choose_agent(request.message)
+    # Get agent response directly with the clean message
+    response = agent_func(clean_message)
     
-    # Get the appropriate prompt template based on agent type
-    prompt_template = get_prompt_template(agent_type)
-    
-    # Prepare prompt variables
-    prompt_vars = {
-        "context": context_text,
-        "history": conversation_history,
-        "message": request.message
-    }
-    
-    # Add agent-specific context if needed
-    if agent_type == "ai":
-        ai_additional_context = """
-        AI encompasses machine learning, neural networks, computer vision, natural language processing,
-        robotics, and many other subfields. Recent breakthroughs include large language models, diffusion models
-        for image generation, and reinforcement learning for complex decision-making.
-        """
-        prompt_vars["ai_context"] = ai_additional_context
-    
-    elif agent_type == "concordia":
-        concordia_additional_context = """
-        Concordia University's Computer Science program offers Bachelor's, Master's, and PhD degrees.
-        Admission requirements include strong math skills, with CEGEP students needing a 27+ overall average
-        and 26+ in math courses. The program covers programming, algorithms, data structures, AI, and software engineering.
-        """
-        prompt_vars["concordia_context"] = concordia_additional_context
-    
-    # Format the prompt using LangChain's template
-    formatted_prompt = prompt_template.format(**prompt_vars)
-    
-    # Get response from the appropriate agent
-    response = agent_func(formatted_prompt)
-    
-    # Save the user message and bot response using LangChain memory and ChromaDB
-    add_message_to_memory(request.session_id, request.message, role="user")
+    # IMPORTANT: Only store the clean user message and final response
+    # This ensures we don't store prompt templates in the context
+    add_message_to_memory(request.session_id, clean_message, role="user")
     add_message_to_memory(request.session_id, response, role="assistant")
     
     return {"message": response}
