@@ -18,7 +18,7 @@ def search_wikipedia(query: str, sentences: int = 2) -> str:
         return error_message
 
 if __name__ == '__main__':
-    # Direct test mode: run this file and input a search query
+    # Direct test mode
     query = input("Enter a Wikipedia search query: ")
     result = search_wikipedia(query)
     print("Result from Wikipedia:")

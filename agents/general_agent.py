@@ -22,7 +22,8 @@ def extract_query(message: str) -> str:
         "explain",
         "give me information on",
         "info on",
-        "information on"
+        "information on",
+        "what's"
     ]
     query = message.lower().strip()
     for prefix in prefixes:
