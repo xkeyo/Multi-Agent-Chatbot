@@ -1,12 +1,19 @@
 # Adaptive Multi-Agent Chatbot System Using Ollama
 
+## Demo of Project
+
+https://drive.google.com/file/d/1oySUfCxXIKnkv6Mg4TJm_caw5rua_0Dh/view
+
+--- 
+
+## Project Description
+
 This project aims to develop an adaptive multi-agent chatbot system that leverages Ollama to provide context-aware assistance. The chatbot system is built on a multi-agent architecture where each agent specializes in a particular area.  The system is made to answer a variety of queries, such as general inquiries, questions concerning artificial intelligence, and inquiries about admissions to Concordia University's computer science program. The system combines context awareness via a vector-based memory store using ChromaDB and also integrates an external knowledge integration using Wikipedia in addition to basic answer production.
 
 - **General Agent:** Agent that handles general questions with a context help from Wikipedia (See implementation in general_agent.py).
 - **Concordia Agent:** Agent that is dedicated to inquiries related to Concordia University Computer Science admission (See implementation in concordia_agent.py).
 - **AI Agent:** Agent that specializes in artificial intelligence and machine learning topics (See implementation in ai_agent.py).
-
-
+  
 ---
 
 ## Table of Contents
